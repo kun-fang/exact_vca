@@ -1,0 +1,12 @@
+This is a FORTRAN code for variational cluster approximation (VCA).
+The exact diagonalization method is used as cluster solver. The code
+is used as-is, meaning there is no support for the code. I will update
+it when I would like to. Some routines are from online sources.
+
+The original version:
+
+-- simple implimentation for VCA.
+-- work properly when the quantum state is symmetric when reverse the
+   spin direction.
+-- no spin up and spin down coupling.
+-- good for invesigate AF, Nematic and some other effects.
