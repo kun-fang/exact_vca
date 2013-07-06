@@ -15,7 +15,7 @@ program greenfunc
 	complex(kind=8)::Xi
 
 	t=>timer_init()
-	clust=>cluster_build(w,miu)
+	clust=>cluster_build()
 	open(unit=7,file='input.data',status='old',iostat=ie)
 	if(ie==0) then
 		do while(ie==0)
@@ -28,7 +28,7 @@ program greenfunc
 		do while(ie/=0)
 			!read(7,*,iostat=ie) bc
 			!print *,bc
-			read(7,*,iostat=ie) clust%tx,clust%ty,clust%miu
+			read(7,*,iostat=ie) clust%hop%lt,clust%hop%lmu
 			backspace(7)
 			backspace(7)
 		end do
@@ -36,17 +36,18 @@ program greenfunc
 	end if
 	write(*,*)"----------------------------------------------------------------"
 	write(*,*)"VCA calculation: initial parameters are"
-	write(*,*)"U=",clust%U,"mu=",miu,"t=",1.00
-	write(*,*)"Cluster t=",clust%tx,"Cluster mu=",clust%miu
+	write(*,*)"U=",clust%hop%U,"mu=",clust%hop%lmu
+	write(*,*)"t=",clust%hop%lt
+	write(*,*)"Cluster t=",clust%hop%ct
+	write(*,*)"Cluster mu=",clust%hop%cmu
 	write(*,*)"----------------------------------------------------------------"
-	call VCA_optimal(clust,miu,x,elec,err)
-	write(*,*) miu,x,elec
-	write(*,*) clust%tx,clust%ty,clust%miu
-	call VCA_fermi_surface(clust,miu)
-	call VCA_spectral_function(clust,miu)
-	call VCA_DOS(clust,miu)
-	call VCA_trans(clust,miu,1.d-3)
-39	write(*,*) "total time =",timer_runtime(t),"seconds"
+	call VCA_optimal(clust,x,elec,err)
+	write(*,*) clust%hop%lmu,x,elec
+	write(*,*) clust%hop%ct,clust%hop%cmu
+	call VCA_fermi_surface(clust)
+	call VCA_spectral_function(clust)
+	call VCA_DOS(clust)
+	write(*,*) "total time =",timer_runtime(t),"seconds"
 	call cluster_clean(clust)
 	deallocate(t)
 end program greenfunc

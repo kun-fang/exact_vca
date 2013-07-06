@@ -29,22 +29,25 @@ contains
 
 	subroutine calDOS(n,d,calE,S)
 		implicit none
-		integer::n,d,hit(n),S(n),nh,i
+		integer::n,d,hit(n),S(n),nh,i,k
 		real(8)::x(d),f
 		integer,external::calE
 		logical::OK
 		S(1:n)=0
 		x(1:d)=0.0
 		f=1.0
-!		do
-!			if(f<epsilon) exit
-			do i=1,MAXSTEP
-				call evolve(d,x)
-				nh=calE(d,x,hit)
-				S=S+hit*f
-			end do
-!			f=f/2
-!		end do
+		do i=1,MAXSTEP
+			call evolve(d,x)
+			nh=calE(d,x,hit)
+			S=S+hit*f
+		end do
+		k=0
+		do i=1,n
+			k=k+S(n)
+		end do
+		do i=1,n
+			S(n)=S(n)*2/n
+		end do
 	end subroutine
 
 	subroutine evolve(d,x)

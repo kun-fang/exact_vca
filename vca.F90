@@ -6,22 +6,19 @@ module Efunc
 
 	type(Q_type),private,pointer::commq
 	type(hubbard_cluster_type),private,pointer::commcl
-	real(kind=8),private::commiu
 	
 	complex(kind=8),private,parameter::Zero=(0.0,0.0),One=(1.0,0.0),Xi=(0.0,1.0)
 	real(kind=8),private,parameter::eps=0.015
 
 contains
 
-	subroutine Efunc_init(n,Emin,Emax,qmat,clust,miu)
+	subroutine Efunc_init(n,Emin,Emax,qmat,clust)
 		integer::n
 		real(8)::Emin,Emax,dE
 		type(Q_type),pointer::qmat
 		type(hubbard_cluster_type),pointer::clust
-		real(kind=8)::miu
 		commq=>qmat
 		commcl=>clust
-		commiu=miu
 		call initDOS(n,Emin,Emax)
 	end subroutine
 	
@@ -40,7 +37,7 @@ contains
 		kx=x(1)
 		ky=x(2)
 		a(1:3)=0
-		call lehmann_transform_Q(commcl,p,commiu,kx,ky)
+		call lehmann_transform_Q(commcl,p,kx,ky)
 		hit(1:n)=0
 		k=0
 		do i=1,n
@@ -83,9 +80,8 @@ module VCA
 
 	contains
 
-	subroutine VCA_optimal(cluster,miu,omega,density,err)
+	subroutine VCA_optimal(cluster,omega,density,err)
 		implicit none
-		real(kind=8),intent(in)::miu
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		real(kind=8),intent(out)::omega,density
 		real(kind=8),pointer,dimension(:)::c,d,var
@@ -97,26 +93,26 @@ module VCA
 		logical::OK,err
 		err=.false.
 		OK=.false.
+		open(unit=9,file='optim.data',status='old',iostat=ie)
+		if(ie==0) then
+			do while(ie==0)
+				read(9,*,iostat=ie) cluster%hop%ct(1),cluster%hop%cmu,omega
+			end do
+			close(9)
+		end if
 		orbit=cluster_get_n_orbit(cluster)
 		call varinit(cluster,n,var)
 		fin=sqrt(dot_product(var,var))
 		allocate(c(n))
 		allocate(d(n))
 		allocate(q(n,n))
-		open(unit=9,file='optim.data',status='old',iostat=ie)
-		if(ie==0) then
-			do while(ie==0)
-				read(9,*,iostat=ie) cluster%tx,cluster%miu,omega
-			end do
-			close(9)
-		end if
 		p=>optimal_init(n,var)
 		rand=>random_init()
 		open(unit=9,file='optim.data',access='append')
 		do
 			if(OK) exit
 			call update(cluster,p%v)
-			f=VCA_potthoff_functional(cluster,miu)
+			f=VCA_potthoff_functional(cluster)
 			fout=sqrt(dot_product(p%v,p%v))
 			if(abs(fout-fin)>150) then
 				err=.true.
@@ -128,13 +124,13 @@ module VCA
 				c(1:n)=p%v(1:n)
 				c(i)=c(i)+p%dx
 				call update(cluster,c)
-				d(i)=VCA_potthoff_functional(cluster,miu)
+				d(i)=VCA_potthoff_functional(cluster)
 				do j=1,n
 					c(1:n)=p%v(1:n)
 					c(i)=c(i)+p%dx
 					c(j)=c(j)+p%dx
 					call update(cluster,c)
-					q(i,j)=VCA_potthoff_functional(cluster,miu)
+					q(i,j)=VCA_potthoff_functional(cluster)
 				end do
 			end do
 			r=random_new(rand)
@@ -142,8 +138,8 @@ module VCA
 		end do
 		if(.not.err) then
 			call update(cluster,p%v)
-			omega=VCA_potthoff_functional(cluster,miu)
-			density=VCA_particle_density(cluster,miu)
+			omega=VCA_potthoff_functional(cluster)
+			density=VCA_particle_density(cluster)
 		end if
 		call optimal_clean(p)
 		call random_clean(rand)
@@ -154,9 +150,8 @@ module VCA
 		close(9)
 	end subroutine
 
-	function VCA_potthoff_functional(cluster,miu) result(x)
+	function VCA_potthoff_functional(cluster) result(x)
 		implicit none
-		real(kind=8),intent(in)::miu
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		type(Q_type),pointer::Q
 		real(kind=8)::omega,x
@@ -165,15 +160,15 @@ module VCA
 		orbit=cluster_get_n_orbit(cluster)
 		Q=>lehmann_init(cluster,omega,1)
 		if(.not.associated(Q)) return
-		x=lehmann_potthoff_functional(cluster,Q,omega,miu)/orbit
-		!write(7,'(4F20.15)') cluster%tx,cluster%ty,cluster%miu,x
+		x=lehmann_potthoff_functional(cluster,Q,omega)/orbit
+		!write(*,'(4F20.15)') cluster%hop%ct,cluster%hop%cmu,x
 		call lehmann_Q_clean(Q)
 	end function
 
-	function VCA_green(cluster,miu,w,kx,ky) result(g)
+	function VCA_green(cluster,w,kx,ky) result(g)
 		implicit none
 		type(hubbard_cluster_type),pointer::cluster
-		real(kind=8)::miu,w,kx,ky,omega,pkx,pky
+		real(kind=8)::w,kx,ky,omega,pkx,pky
 		integer::orbit,i,j,k,dim
 		complex(kind=8)::g
 		complex(kind=8),pointer,dimension(:,:)::Gp
@@ -184,17 +179,17 @@ module VCA
 		orbit=cluster_get_n_orbit(cluster)
 		allocate(Gp(orbit,orbit))
 		Q=>lehmann_init(cluster,omega,1)
-		call lehmann_transform_Q(cluster,Q,miu,kx,ky)
+		call lehmann_transform_Q(cluster,Q,kx,ky)
 		call lehmann_green_function(w+Xi*eps,orbit,Q,Gp)
 		g=lehmann_restore(cluster,Gp,kx,ky)
 		call lehmann_Q_clean(Q)
 		deallocate(Gp)
 	end function
 	
-	function VCA_real_green(cluster,miu,x,y,time,spin) result(g)
+	function VCA_real_green(cluster,x,y,time,spin) result(g)
 		implicit none
 		type(hubbard_cluster_type),pointer::cluster
-		real(kind=8)::miu,time,omega
+		real(kind=8)::time,omega
 		integer::alpha,orbit,i,j,k,x,y,xt,yt,xr,yr,s,spin
 		complex(8)::g
 		type(Q_type),pointer::Q
@@ -230,13 +225,12 @@ module VCA
 		if(xr==1.and.yr==0) alpha=4
 		orbit=cluster_get_n_orbit(cluster)
 		Q=>lehmann_init(cluster,omega,spin)
-		g=lehmann_real_green(cluster,Q,miu,alpha,xt,yt,time)
+		g=lehmann_real_green(cluster,Q,alpha,xt,yt,time)
 		call lehmann_Q_clean(Q)
 	end function
 
-	function VCA_particle_density(cluster,miu) result(density)
+	function VCA_particle_density(cluster) result(density)
 		implicit none
-		real(kind=8),intent(in)::miu
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		type(Q_type),pointer::Q
 		real(kind=8)::density,omega
@@ -245,13 +239,12 @@ module VCA
 		orbit=cluster_get_n_orbit(cluster)
 		Q=>lehmann_init(cluster,omega,1)
 		if(.not.associated(Q)) return
-		density=lehmann_particle_density(cluster,Q,miu)/orbit
+		density=lehmann_particle_density(cluster,Q)/orbit
 		call lehmann_Q_clean(Q)
 	end function
 
-	subroutine VCA_spectral_function(cluster,miu)
+	subroutine VCA_spectral_function(cluster)
 		implicit none
-		real(kind=8),intent(in)::miu
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		type(Q_type),pointer::Q,p
 		real(kind=8)::omega,x,kx,ky,w,Pi
@@ -272,15 +265,16 @@ module VCA
 		do
 			if(ky-Pi>1.d-6) then
 				ky=Pi
+				kx=Pi
 				exit
 			end if
 			w=-5
 			k=k+1
-			write(*,*) kx,ky
+			!write(*,*) kx,ky
 			do
 				if(w>5) exit
 				p=>lehmann_clone_Q(Q)
-				call lehmann_transform_Q(cluster,p,miu,kx,ky)
+				call lehmann_transform_Q(cluster,p,kx,ky)
 				call lehmann_green_function(w+Xi*eps,orbit,p,G)
 				gl=lehmann_restore(cluster,G,kx,ky)
 				x=-imag(gl)/Pi
@@ -288,23 +282,22 @@ module VCA
 				call lehmann_Q_clean(p)
 				w=w+0.1
 			end do
-			ky=ky+Pi/nk/2.0
-			!kx=0.d0
+			ky=ky+Pi/nk
 			kx=ky
 		end do
 
 		do
 			if(ky<-1.d-6) then
-				kx=0
+				ky=0.d0
 				exit
 			end if
 			w=-5
 			k=k+1
-			write(*,*) kx,ky
+			!write(*,*) kx,ky
 			do
 				if(w>5) exit
 				p=>lehmann_clone_Q(Q)
-				call lehmann_transform_Q(cluster,p,miu,kx,ky)
+				call lehmann_transform_Q(cluster,p,kx,ky)
 				call lehmann_green_function(w+Xi*eps,orbit,p,G)
 				gl=lehmann_restore(cluster,G,kx,ky)
 				x=-imag(gl)/Pi
@@ -312,9 +305,7 @@ module VCA
 				call lehmann_Q_clean(p)
 				w=w+0.1
 			end do
-			!kx=kx+sqrt(3.d0)*Pi/nk/2.d0
-			!ky=-kx/sqrt(3.d0)+4.d0*Pi/3/sqrt(3.d0)
-			ky=ky-Pi/nk/2.0
+			ky=ky-Pi/nk
 		end do
 
 		do
@@ -324,11 +315,11 @@ module VCA
 			end if
 			w=-5
 			k=k+1
-			write(*,*) kx,ky
+			!write(*,*) kx,ky
 			do
 				if(w>5) exit
 				p=>lehmann_clone_Q(Q)
-				call lehmann_transform_Q(cluster,p,miu,kx,ky)
+				call lehmann_transform_Q(cluster,p,kx,ky)
 				call lehmann_green_function(w+Xi*eps,orbit,p,G)
 				gl=lehmann_restore(cluster,G,kx,ky)
 				x=-imag(gl)/Pi
@@ -336,8 +327,7 @@ module VCA
 				call lehmann_Q_clean(p)
 				w=w+0.1
 			end do
-			kx=kx-Pi/nk/2.d0
-			!ky=sqrt(3.d0)*kx
+			kx=kx-Pi/nk
 		end do
 
 		call lehmann_Q_clean(Q)
@@ -345,9 +335,9 @@ module VCA
 		close(7)
 	end subroutine
 
-	subroutine VCA_trans(cluster,miu,v)
+	subroutine VCA_trans(cluster,v)
 		implicit none
-		real(kind=8),intent(in)::miu,v
+		real(kind=8),intent(in)::v
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		type(Q_type),pointer::Q,p,p1,p2,a,a1,a2
 		real(kind=8)::omega,x,y,kx,ky,qx,qy,coor(2,4),Pi,broad,w,wi,wo,ws
@@ -370,13 +360,13 @@ module VCA
 			kx=i*2*Pi/nn+Pi-0.1*Pi
 			ky=0.d0
 			p=>lehmann_clone_Q(Q)
-			call lehmann_transform_Q(cluster,p,miu,kx,ky)
+			call lehmann_transform_Q(cluster,p,kx,ky)
 			call lehmann_green_function(v+eps*Xi,orbit,p,G)
 			gl=lehmann_restore(cluster,G,kx,ky)
 			call lehmann_Q_clean(p)
 			x=-imag(gl)/Pi
 			p=>lehmann_clone_Q(Q)
-			call lehmann_transform_Q(cluster,p,miu,-kx,-ky)
+			call lehmann_transform_Q(cluster,p,-kx,-ky)
 			call lehmann_green_function(-v+eps*Xi,orbit,p,G)
 			gl=lehmann_restore(cluster,G,-kx,-ky)
 			call lehmann_Q_clean(p)
@@ -384,13 +374,13 @@ module VCA
 			kx=Pi
 			ky=i*2*Pi/nn-0.1*Pi
 			p=>lehmann_clone_Q(Q)
-			call lehmann_transform_Q(cluster,p,miu,kx,ky)
+			call lehmann_transform_Q(cluster,p,kx,ky)
 			call lehmann_green_function(v+eps*Xi,orbit,p,G)
 			gl=lehmann_restore(cluster,G,kx,ky)
 			call lehmann_Q_clean(p)
 			y=-imag(gl)/Pi
 			p=>lehmann_clone_Q(Q)
-			call lehmann_transform_Q(cluster,p,miu,-kx,-ky)
+			call lehmann_transform_Q(cluster,p,-kx,-ky)
 			call lehmann_green_function(-v+eps*Xi,orbit,p,G)
 			gl=lehmann_restore(cluster,G,-kx,-ky)
 			call lehmann_Q_clean(p)
@@ -402,9 +392,9 @@ module VCA
 	end subroutine
 
 
-	function VCA_op(cluster,miu,v) result(x)
+	function VCA_op(cluster,v) result(x)
 		implicit none
-		real(kind=8),intent(in)::miu,v
+		real(kind=8),intent(in)::v
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		type(Q_type),pointer::Q1,Q2,p,p1,p2,a,a1,a2
 		real(kind=8)::omega,x,kx,ky,qx,qy,coor(2,4),Pi,broad,w,wi,wo,ws
@@ -435,8 +425,8 @@ module VCA
 				ky=jj*Pi/nn
 				p=>lehmann_clone_Q(Q1)
 				p1=>lehmann_clone_Q(Q2)
-				call lehmann_transform_Q(cluster,p,miu,kx,ky)
-				call lehmann_transform_Q(cluster,p1,miu,kx,ky)
+				call lehmann_transform_Q(cluster,p,kx,ky)
+				call lehmann_transform_Q(cluster,p1,kx,ky)
 				call lehmann_green_function(w+Xi*eps,orbit,p,G)
 				glx=glx+(G(1,4)+G(4,1)*exp(-Xi*2*kx))*(G(4,1)+G(1,4)*exp(Xi*2*kx))
 				deallocate(G)
@@ -454,8 +444,8 @@ module VCA
 				ky=jj*Pi/nn
 				p=>lehmann_clone_Q(Q1)
 				p1=>lehmann_clone_Q(Q2)
-				call lehmann_transform_Q(cluster,p,miu,kx,ky)
-				call lehmann_transform_Q(cluster,p1,miu,kx,ky)
+				call lehmann_transform_Q(cluster,p,kx,ky)
+				call lehmann_transform_Q(cluster,p1,kx,ky)
 				call lehmann_green_function(w+Xi*eps,orbit,p,G)
 				gly=gly+(G(1,2)+G(2,1)*exp(-Xi*2*kx))*(G(2,1)+G(1,2)*exp(Xi*2*kx))
 				deallocate(G)
@@ -471,9 +461,9 @@ module VCA
 	end function
 
 
-	subroutine VCA_spin_pair(cluster,miu,v)
+	subroutine VCA_spin_pair(cluster,v)
 		implicit none
-		real(kind=8),intent(in)::miu,v
+		real(kind=8),intent(in)::v
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		type(Q_type),pointer::Q1,Q2,p,p1,p2,a,a1,a2
 		real(kind=8)::omega,x,kx,ky,qx,qy,coor(2,4),Pi,broad,w,wi,wo,ws
@@ -508,9 +498,9 @@ module VCA
 						ky=j*Pi/nk
 						!spin up
 						p=>lehmann_clone_Q(Q1)
-						call lehmann_transform_Q(cluster,p,miu,kx,ky)
+						call lehmann_transform_Q(cluster,p,kx,ky)
 						p1=>lehmann_clone_Q(Q1)
-						call lehmann_transform_Q(cluster,p1,miu,kx+qx,ky+qy)
+						call lehmann_transform_Q(cluster,p1,kx+qx,ky+qy)
 !                        a=>p
 !                        glx=0.0
 !                        do
@@ -547,9 +537,9 @@ module VCA
 						call lehmann_Q_clean(p1)
 						!spin down
 						p=>lehmann_clone_Q(Q2)
-						call lehmann_transform_Q(cluster,p,miu,kx,ky)
+						call lehmann_transform_Q(cluster,p,kx,ky)
 						p1=>lehmann_clone_Q(Q2)
-						call lehmann_transform_Q(cluster,p1,miu,kx+qx,ky+qy)
+						call lehmann_transform_Q(cluster,p1,kx+qx,ky+qy)
 !                        a=>p
 !                        glx=0.0
 !                        do
@@ -594,14 +584,13 @@ module VCA
 		call lehmann_Q_clean(Q2)
 	end subroutine
 
-	subroutine VCA_fermi_surface(cluster,miu)
+	subroutine VCA_fermi_surface(cluster)
 		implicit none
-		real(kind=8),intent(in)::miu
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		type(Q_type),pointer::Q,p,a
 		real(kind=8)::omega,x,kx,ky,Pi
 		complex(kind=8)::gl
-		integer::orbit,i,j,n
+		integer::orbit,i,j
 		logical::OK
 		complex(kind=8),pointer,dimension(:,:)::G
 		if(.not.associated(cluster)) return
@@ -616,7 +605,7 @@ module VCA
 				kx=i*2*Pi/nk-Pi
 				ky=j*2*Pi/nk-Pi
 				p=>lehmann_clone_Q(Q)
-				call lehmann_transform_Q(cluster,p,miu,kx,ky)
+				call lehmann_transform_Q(cluster,p,kx,ky)
 				call lehmann_green_function(eps*Xi,orbit,p,G)
 				!call matrix_inverse(orbit,G,OK)
 				gl=lehmann_restore(cluster,G,kx,ky)
@@ -630,9 +619,8 @@ module VCA
 		close(8)
 	end subroutine
 
-	subroutine VCA_DOS(cluster,miu)
+	subroutine VCA_DOS(cluster)
 		implicit none
-		real(kind=8),intent(in)::miu
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		type(Q_type),pointer::Q,p,a
 		real(kind=8)::omega,kx,ky,Pi,w
@@ -646,7 +634,7 @@ module VCA
 		if(.not.associated(Q)) return
 		n=100
 		allocate(S(n))
-		call Efunc_init(n,-4.0d0,4.0d0,Q,cluster,miu)
+		call Efunc_init(n,-4.0d0,4.0d0,Q,cluster)
 		call calDOS(n,2,Ekxy,S)
 		open(unit=10,file='DOS.data',status='replace')
 		do i=1,n
@@ -667,9 +655,8 @@ module VCA
 		implicit none
 		type(hubbard_cluster_type),pointer,intent(inout)::cluster
 		real(kind=8),pointer,dimension(:),intent(in)::v
-		cluster%miu=v(2)
-		cluster%tx=v(1)
-		cluster%ty=v(1)
+		cluster%hop%cmu=v(2)
+		cluster%hop%ct(1)=v(1)
 	end subroutine
 
 	subroutine varinit(cluster,n,v)
@@ -679,8 +666,8 @@ module VCA
 		real(kind=8),pointer,dimension(:),intent(out)::v
 		n=2
 		allocate(v(n))
-		v(2)=cluster%miu
-		v(1)=cluster%tx
+		v(2)=cluster%hop%cmu
+		v(1)=cluster%hop%ct(1)
 		!v(2)=cluster%ty
 		!write(7,*) "n=",n
 end subroutine

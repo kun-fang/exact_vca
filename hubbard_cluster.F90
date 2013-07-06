@@ -6,9 +6,7 @@ module hubbard_cluster
 	implicit none
 	
 	type hubbard_cluster_type
-		character(len=20)::name
-		type(cluster),pointer::hop
-		real(kind=8)::U,miu,M,Tep,tx,ty,delta
+		type(hop),pointer::hop
 		integer,pointer,dimension(:,:)::struct
 		integer::orbit,dim
 		type(basis_type),pointer::bas
@@ -22,36 +20,17 @@ module hubbard_cluster
 	!***********************!
 	!   cluster structure   !
 	!***********************!
-	private::square,square_aniso,betts8,ladder8,ladder6,site10
+	!private::square,square_aniso,betts8,ladder8,ladder6,site10
 	
 		
 	contains
 !--------------------------public---------------------------------
 
-	function cluster_build(w,miu) result(p)
+	function cluster_build() result(p)
 		implicit none
 		type(hubbard_cluster_type),pointer::p
-		class(cluster),pointer::cl
-		character(len=20)::rc
-		integer::i,j,k,it
-		real(kind=8)::w,miu
 		allocate(p)
-		open(unit=7,file='cluster.input',status='old',action='read')
-		read(7,*) p%name
-		read(7,*) rc,miu
-		read(7,*) rc,p%U
-		read(7,*) rc,p%tx
-		read(7,*) rc,p%ty
-		read(7,*) rc,p%miu
-		read(7,*) rc,p%Tep
-		read(7,*) rc,p%M
-		read(7,*) rc,p%delta
-		read(7,*) rc,w
-		close(7)
-		rc=trim(adjustl(p%name))//'.conf'
-		allocate(p%hop)
-		cl=>p%hop
-		call cluster_init(cl,trim(adjustl(rc)))
+		p%hop=>cluster_init()
 		p%orbit=p%hop%site
 		p%bas=>basis_init(p%orbit)
 		p%dim=basis_get_n_basis(p%bas)
@@ -65,11 +44,7 @@ module hubbard_cluster
 		if(.not.associated(clust)) return
 		if(associated(clust%nakedH)) call sparse_real_clean(clust%nakedH)
 		if(associated(clust%bas)) call basis_clean(clust%bas)
-		deallocate(clust%hop%coordinate)
-		deallocate(clust%hop%vector)
-		deallocate(clust%hop%hop)
-		deallocate(clust%hop)
-		deallocate(clust)
+		if(associated(clust%hop)) call cluster_delete(clust%hop)
 	end subroutine
 
 	subroutine cluster_solver(cluster,e,X)
@@ -122,7 +97,7 @@ module hubbard_cluster
 			elec=basis_elec(ti,bas)
 			k=0
 			x=pt(i,i)
-			if(abs(p%M)>1.d-10) then
+			if(abs(p%hop%M)>1.d-10) then
 				b=>basis_get_basis(ti,bas)
 				k=0
 				do j=1,site
@@ -130,7 +105,7 @@ module hubbard_cluster
 				end do
 				deallocate(b)
 			end if
-			x=p%U*x-p%miu*elec-p%M*k
+			x=p%hop%U*x-p%hop%cmu*elec-p%hop%M*k
 			pt(i,i)=x
 			do j=1,n
 				if(i==j) cycle
@@ -146,8 +121,7 @@ module hubbard_cluster
 					l=1
 				end if
 				k=int(abs(x))
-				if(k==1) x=-p%tx*l
-				if(k==2) x=-p%ty*l
+				x=-p%hop%ct(k)*l
 				pt(i,j)=x
 			end do
 		end do
@@ -185,32 +159,30 @@ module hubbard_cluster
 	function naked_H_build(b,cl) result(H)
 		implicit none
 		type(basis_type),pointer,intent(in)::b
-		type(cluster),pointer::cl
-		integer,pointer,dimension(:,:)::hop
+		type(hop),pointer::cl
 		type(sparse_real_type),pointer::H
 		integer::i,j,orbit,dim
 		orbit=basis_get_n_orbit(b)
 		dim=basis_get_n_basis(b)
 		H=>sparse_real_init(dim)
-		allocate(hop(orbit,orbit))
-		hop=cl%hop(1:orbit,1:orbit,0)
-		call buildH(cl,dim,orbit,H,hop,b)
-		deallocate(hop)
+		call buildH(cl,dim,orbit,H,b)
 	end function
 
-	subroutine buildH(cl,dim,site,H,t,b)
+	subroutine buildH(cl,dim,site,H,b)
 		implicit none
-		type(cluster),pointer::cl
+		type(hop),pointer::cl
 		integer,intent(in)::dim,site
 		type(sparse_real_type),pointer,intent(inout)::H
-		integer,pointer,dimension(:,:),intent(in)::t
+		integer,pointer,dimension(:,:)::t
 		type(basis_type),pointer,intent(in)::b
 		real(kind=8),dimension(2)::d
-		integer::i,j,k1,k,l,r,s,alpha,beta,sp,init,final
+		integer::i,j,k1,k,l,r,s,alpha,beta,sp,init,final,ii
 		integer::n_block
 		real(kind=8)::x
+		logical::ok
 		
 		n_block=basis_get_n_block(b)
+		t=>cl%cluster
 		do l=1,n_block
 			init=basis_get_block(l,b)
 			if(l==n_block) then
@@ -228,19 +200,16 @@ module hubbard_cluster
 						k1=i/abs(i)
 						i=abs(i)
 						do beta=1,site
-							if(t(alpha,beta)==0) cycle
+							do ii=1,cl%nct
+								if((t(1,ii)==alpha.and.t(2,ii)==beta).or.(t(1,ii)==beta.and.t(2,ii)==alpha)) exit
+							end do
+							if(ii==cl%nct+1) cycle
+							if(t(3,ii)==0) cycle
 							s=basis_cplus(b,beta,sp,i)
 							if(s==0) cycle
 							k=k1*s/abs(s)
 							s=abs(s)
-							if(t(alpha,beta)==1) then
-								d=cl%coordinate(1:2,alpha)-cl%coordinate(1:2,beta)
-								if(abs(d(1))>abs(d(2))) then
-									x=k*1.0
-								else
-									x=k*2.0
-								end if
-							end if
+							x=k*t(3,ii)
 							call sparse_real_add_element(H,s,r,x)
 						end do
 					end do
@@ -263,433 +232,6 @@ module hubbard_cluster
 	end function
 
 	!******************* cluster structure *********************
-
-
-	subroutine square(hop,site)
-		implicit none
-		integer,intent(out)::site
-		integer,pointer,dimension(:,:),intent(out)::hop
-		integer::i,j
-		site=4
-		allocate(hop(site,site))
-		do i=1,site
-			do j=1,site
-				hop(j,i)=0
-			end do
-		end do
-		hop(1,2)=1
-		hop(1,3)=2
-		hop(1,4)=1
-		hop(2,1)=1
-		hop(2,3)=1
-		hop(2,4)=2
-		hop(3,1)=2
-		hop(3,2)=1
-		hop(3,4)=1
-		hop(4,1)=1
-		hop(4,2)=2
-		hop(4,3)=1
-	end subroutine
-
-	subroutine square_aniso(hop,site)
-		implicit none
-		integer,intent(out)::site
-		integer,pointer,dimension(:,:),intent(out)::hop
-		integer::i,j
-		site=4
-		allocate(hop(site,site))
-		do i=1,site
-			do j=1,site
-				hop(j,i)=0
-			end do
-		end do
-		hop(1,2)=1
-		hop(1,4)=2
-		hop(2,1)=1
-		hop(2,3)=2
-		hop(3,2)=2
-		hop(3,4)=1
-		hop(4,1)=2
-		hop(4,3)=1
-	end subroutine
-	
-	subroutine betts8(hop,site)
-		implicit none
-		integer,intent(out)::site
-		integer,pointer,dimension(:,:),intent(out)::hop
-		integer::i,j
-		site=8
-		allocate(hop(site,site))
-		do i=1,site
-			do j=1,site
-				hop(j,i)=0
-			end do
-		end do
-		hop(1,2)=1
-		hop(1,4)=1
-		hop(1,6)=1
-		hop(1,8)=1
-		hop(1,3)=2
-		hop(1,7)=2
-		hop(2,1)=1
-		hop(2,3)=1
-		hop(2,5)=1
-		hop(2,7)=1
-		hop(2,4)=2
-		hop(2,8)=2
-		hop(3,2)=1
-		hop(3,4)=1
-		hop(3,6)=1
-		hop(3,8)=1
-		hop(3,1)=2
-		hop(3,5)=2
-		hop(4,1)=1
-		hop(4,3)=1
-		hop(4,5)=1
-		hop(4,7)=1
-		hop(4,2)=2
-		hop(4,6)=2
-		hop(5,2)=1
-		hop(5,4)=1
-		hop(5,6)=1
-		hop(5,8)=1
-		hop(5,3)=2
-		hop(5,7)=2
-		hop(6,1)=1
-		hop(6,3)=1
-		hop(6,5)=1
-		hop(6,7)=1
-		hop(6,4)=2
-		hop(6,8)=2
-		hop(7,2)=1
-		hop(7,4)=1
-		hop(7,6)=1
-		hop(7,8)=1
-		hop(7,1)=2
-		hop(7,5)=2
-		hop(8,1)=1
-		hop(8,3)=1
-		hop(8,5)=1
-		hop(8,7)=1
-		hop(8,2)=2
-		hop(8,6)=2
-	end subroutine
-	
-	subroutine ladder8(hop,site)
-		implicit none
-		integer,intent(out)::site
-		integer,pointer,dimension(:,:),intent(out)::hop
-		integer::i,j
-		site=8
-		allocate(hop(site,site))
-		do i=1,site
-			do j=1,site
-				hop(j,i)=0
-			end do
-		end do
-		hop(1,2)=1
-		hop(1,4)=1
-		hop(1,6)=1
-		hop(1,8)=1
-		hop(1,3)=2
-		hop(1,7)=2
-		hop(2,1)=1
-		hop(2,3)=1
-		hop(2,5)=1
-		hop(2,7)=1
-		hop(2,4)=2
-		hop(2,8)=2
-		hop(3,2)=1
-		hop(3,4)=1
-		hop(3,6)=1
-		hop(3,8)=1
-		hop(3,1)=2
-		hop(3,5)=2
-		hop(4,1)=1
-		hop(4,3)=1
-		hop(4,5)=1
-		hop(4,7)=1
-		hop(4,2)=2
-		hop(4,6)=2
-		hop(5,2)=1
-		hop(5,4)=1
-		hop(5,6)=1
-		hop(5,8)=1
-		hop(5,3)=2
-		hop(5,7)=2
-		hop(6,1)=1
-		hop(6,3)=1
-		hop(6,5)=1
-		hop(6,7)=1
-		hop(6,4)=2
-		hop(6,8)=2
-		hop(7,2)=1
-		hop(7,4)=1
-		hop(7,6)=1
-		hop(7,8)=1
-		hop(7,1)=2
-		hop(7,5)=2
-		hop(8,1)=1
-		hop(8,3)=1
-		hop(8,5)=1
-		hop(8,7)=1
-		hop(8,2)=2
-		hop(8,6)=2
-	end subroutine
-	
-	subroutine ladder6(hop,site)
-		implicit none
-		integer,intent(out)::site
-		integer,pointer,dimension(:,:),intent(out)::hop
-		integer::i,j
-		site=6
-		allocate(hop(site,site))
-		do i=1,site
-			do j=1,site
-				hop(j,i)=0
-			end do
-		end do
-		hop(1,2)=1
-		hop(1,4)=1
-		hop(1,6)=1
-		hop(1,8)=1
-		hop(1,3)=2
-		hop(1,7)=2
-		hop(2,1)=1
-		hop(2,3)=1
-		hop(2,5)=1
-		hop(2,7)=1
-		hop(2,4)=2
-		hop(2,8)=2
-		hop(3,2)=1
-		hop(3,4)=1
-		hop(3,6)=1
-		hop(3,8)=1
-		hop(3,1)=2
-		hop(3,5)=2
-		hop(4,1)=1
-		hop(4,3)=1
-		hop(4,5)=1
-		hop(4,7)=1
-		hop(4,2)=2
-		hop(4,6)=2
-		hop(5,2)=1
-		hop(5,4)=1
-		hop(5,6)=1
-		hop(5,8)=1
-		hop(5,3)=2
-		hop(5,7)=2
-		hop(6,1)=1
-		hop(6,3)=1
-		hop(6,5)=1
-		hop(6,7)=1
-		hop(6,4)=2
-		hop(6,8)=2
-	end subroutine
-	
-	subroutine site10(hop,site)
-		implicit none
-		integer,intent(out)::site
-		integer,pointer,dimension(:,:),intent(out)::hop
-		integer::i,j
-		site=10
-		allocate(hop(site,site))
-		do i=1,site
-			do j=1,site
-				hop(j,i)=0
-			end do
-		end do
-		hop(1,2)=1
-		hop(1,4)=1
-		hop(1,8)=1
-		hop(1,10)=1
-		hop(1,3)=2
-		hop(1,5)=2
-		hop(1,7)=2
-		hop(1,9)=2
-		hop(2,1)=1
-		hop(2,3)=1
-		hop(2,5)=1
-		hop(2,9)=1
-		hop(2,4)=2
-		hop(2,6)=2
-		hop(2,8)=2
-		hop(2,10)=2
-		hop(3,2)=1
-		hop(3,4)=1
-		hop(3,6)=1
-		hop(3,10)=1
-		hop(3,1)=2
-		hop(3,5)=2
-		hop(3,7)=2
-		hop(3,9)=2
-		hop(4,1)=1
-		hop(4,3)=1
-		hop(4,5)=1
-		hop(4,7)=1
-		hop(4,2)=2
-		hop(4,6)=2
-		hop(4,8)=2
-		hop(4,10)=2
-		hop(5,2)=1
-		hop(5,4)=1
-		hop(5,6)=1
-		hop(5,8)=1
-		hop(5,1)=2
-		hop(5,3)=2
-		hop(5,7)=2
-		hop(5,9)=2
-		hop(6,3)=1
-		hop(6,5)=1
-		hop(6,7)=1
-		hop(6,9)=1
-		hop(6,2)=2
-		hop(6,4)=2
-		hop(6,8)=2
-		hop(6,10)=2
-		hop(7,4)=1
-		hop(7,6)=1
-		hop(7,8)=1
-		hop(7,10)=1
-		hop(7,1)=2
-		hop(7,3)=2
-		hop(7,5)=2
-		hop(7,9)=2
-		hop(8,1)=1
-		hop(8,5)=1
-		hop(8,7)=1
-		hop(8,9)=1
-		hop(8,2)=2
-		hop(8,4)=2
-		hop(8,6)=2
-		hop(8,10)=2
-		hop(9,2)=1
-		hop(9,6)=1
-		hop(9,8)=1
-		hop(9,10)=1
-		hop(9,1)=2
-		hop(9,3)=2
-		hop(9,5)=2
-		hop(9,7)=2
-		hop(10,1)=1
-		hop(10,3)=1
-		hop(10,7)=1
-		hop(10,9)=1
-		hop(10,2)=2
-		hop(10,4)=2
-		hop(10,6)=2
-		hop(10,8)=2
-	end subroutine
-
-	subroutine site12(hop,site)
-		implicit none
-		integer,intent(out)::site
-		integer,pointer,dimension(:,:),intent(out)::hop
-		integer::i,j
-		site=12
-		allocate(hop(site,site))
-		do i=1,site
-			do j=1,site
-				hop(j,i)=0
-			end do
-		end do
-		hop(1,2)=1
-		hop(1,4)=1
-		hop(1,5)=1
-		hop(1,9)=1
-		hop(1,6)=2
-		hop(1,8)=2
-		hop(1,10)=2
-		hop(1,12)=2
-		hop(2,1)=1
-		hop(2,3)=1
-		hop(2,6)=1
-		hop(2,10)=1
-		hop(2,5)=2
-		hop(2,7)=2
-		hop(2,9)=2
-		hop(2,11)=2
-		hop(3,2)=1
-		hop(3,4)=1
-		hop(3,7)=1
-		hop(3,11)=1
-		hop(3,6)=2
-		hop(3,8)=2
-		hop(3,10)=2
-		hop(3,12)=2
-		hop(4,1)=1
-		hop(4,3)=1
-		hop(4,8)=1
-		hop(4,12)=1
-		hop(4,5)=2
-		hop(4,7)=2
-		hop(4,9)=2
-		hop(4,11)=2
-		hop(5,1)=1
-		hop(5,6)=1
-		hop(5,8)=1
-		hop(5,9)=1
-		hop(5,2)=2
-		hop(5,4)=2
-		hop(5,10)=2
-		hop(5,12)=2
-		hop(6,2)=1
-		hop(6,5)=1
-		hop(6,7)=1
-		hop(6,10)=1
-		hop(6,1)=2
-		hop(6,3)=2
-		hop(6,9)=2
-		hop(6,11)=2
-		hop(7,3)=1
-		hop(7,6)=1
-		hop(7,8)=1
-		hop(7,11)=1
-		hop(7,3)=2
-		hop(7,6)=2
-		hop(7,8)=2
-		hop(7,11)=2
-		hop(8,4)=1
-		hop(8,5)=1
-		hop(8,7)=1
-		hop(8,12)=1
-		hop(8,1)=2
-		hop(8,3)=2
-		hop(8,9)=2
-		hop(8,11)=2
-		hop(9,1)=1
-		hop(9,5)=1
-		hop(9,10)=1
-		hop(9,12)=1
-		hop(9,2)=2
-		hop(9,4)=2
-		hop(9,6)=2
-		hop(9,8)=2
-		hop(10,2)=1
-		hop(10,6)=1
-		hop(10,9)=1
-		hop(10,11)=1
-		hop(10,1)=2
-		hop(10,3)=2
-		hop(10,5)=2
-		hop(10,7)=2
-		hop(11,3)=1
-		hop(11,7)=1
-		hop(11,10)=1
-		hop(11,12)=1
-		hop(11,2)=2
-		hop(11,4)=2
-		hop(11,6)=2
-		hop(11,8)=2
-		hop(12,4)=1
-		hop(12,8)=1
-		hop(12,9)=1
-		hop(12,11)=1
-		hop(12,1)=2
-		hop(12,3)=2
-		hop(12,5)=2
-		hop(12,7)=2
-	end subroutine
 
 
 end module hubbard_cluster

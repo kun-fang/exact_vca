@@ -26,3 +26,6 @@ Thunbs.db
 obj/
 [Rr]elease*/
 _ReSharper*/
+#忽略程序运行产生的data文件
+*.data
+fort.*

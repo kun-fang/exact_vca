@@ -3,6 +3,9 @@ The exact diagonalization method is used as cluster solver. The code
 is used as-is, meaning there is no support for the code. I will update
 it when I would like to. Some routines are from online sources.
 
+update 1:
+-- change input format for further expansion
+
 The original version:
 
 -- simple implimentation for VCA.

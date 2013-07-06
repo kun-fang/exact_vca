@@ -29,7 +29,7 @@ module lehmann
 		type(Q_type),pointer::Q
 		integer::i,j,k,n,spin
 		real(kind=8)::Tep
-		Tep=cluster%Tep
+		Tep=cluster%hop%Tep
 		n=cluster_get_dim(cluster)
 		call cluster_solver(cluster,e,X)
 		Z=>partition(n,e,Tep,omega)
@@ -83,24 +83,23 @@ module lehmann
 		x=x/orbit
 	end function
 
-	function lehmann_particle_density(cluster,Q,miu) result(x)
+	function lehmann_particle_density(cluster,Q) result(x)
 		implicit none
 		type(hubbard_cluster_type),pointer,intent(in)::cluster
 		type(Q_type),pointer,intent(in)::Q
-		real(kind=8),intent(in)::miu
 		real(kind=8)::kx,ky,sum,Tep,x,w,Pi
 		type(Q_type),pointer::p,a
 		integer::i,j,k
 		x=0.0
 		if(.not.associated(Q).or..not.associated(cluster)) return
-		Tep=cluster%Tep
+		Tep=cluster%hop%Tep
 		Pi=asin(1.d0)*2
 		do i=0,nk-1
 			do j=0,nk-1
 				kx=i*Pi/nk
 				ky=j*Pi/nk
 				p=>lehmann_clone_Q(Q)
-				call lehmann_transform_Q(cluster,p,miu,kx,ky)
+				call lehmann_transform_Q(cluster,p,kx,ky)
 				a=>p
 				do
 					if(.not.associated(a)) exit
@@ -120,11 +119,11 @@ module lehmann
 		x=x/nk/nk
 	end function
 
-	function lehmann_real_green(cluster,Q,miu,alpha,xt,yt,time) result(g)
+	function lehmann_real_green(cluster,Q,alpha,xt,yt,time) result(g)
 		implicit none
 		type(hubbard_cluster_type),pointer,intent(in)::cluster
 		type(Q_type),pointer,intent(in)::Q
-		real(kind=8),intent(in)::miu,time
+		real(kind=8),intent(in)::time
 		integer::alpha,xt,yt
 		real(kind=8)::kx,ky,sum,Tep,w,Pi
 		complex(8)::s,g,x
@@ -132,7 +131,7 @@ module lehmann
 		integer::i,j,k
 		x=0.0
 		if(.not.associated(Q).or..not.associated(cluster)) return
-		Tep=cluster%Tep
+		Tep=cluster%hop%Tep
 		Pi=asin(1.d0)*2
 		s=Zero
 		do i=0,nk-1
@@ -140,7 +139,7 @@ module lehmann
 				kx=i*Pi/nk
 				ky=j*Pi/nk
 				p=>lehmann_clone_Q(Q)
-				call lehmann_transform_Q(cluster,p,miu,kx,ky)
+				call lehmann_transform_Q(cluster,p,kx,ky)
 				a=>p
 				x=Zero
 				do
@@ -163,25 +162,24 @@ module lehmann
 	end function
 
 
-	function lehmann_potthoff_functional(cluster,Q,omega,miu) result(func)
+	function lehmann_potthoff_functional(cluster,Q,omega) result(func)
 		implicit none
 		real(kind=8),intent(in)::omega
 		type(hubbard_cluster_type),pointer,intent(in)::cluster
 		type(Q_type),pointer,intent(in)::Q
-		real(kind=8),intent(in)::miu
 		real(kind=8)::func,kx,ky,sum,o1,o2,Tep,Pi
 		integer::i,j,k,nw,orbit
 		real(kind=8),pointer,dimension(:)::wprime,w
 		real(kind=8),pointer,dimension(:,:)::tprime
 		complex(kind=8),pointer,dimension(:,:)::t,V,M
 		if(.not.associated(Q).or..not.associated(cluster)) return
-		Tep=cluster%Tep
+		Tep=cluster%hop%Tep
 		orbit=cluster_get_n_orbit(cluster)
 		Pi=asin(1.d0)*2
 		allocate(t(orbit,orbit))
 		allocate(tprime(orbit,orbit))
 		allocate(V(orbit,orbit))
-		call hop_cluster(cluster,tprime,1)
+		call hop_cluster(cluster%hop,tprime,1)
 		call get_w(Q,nw,wprime)
 		o1=Trln(nw,wprime,Tep)
 		allocate(w(nw))
@@ -190,7 +188,7 @@ module lehmann
 			do j=0,nk-1
 				kx=i*Pi/nk
 				ky=j*Pi/nk
-				call hop_lattice(cluster,miu,t,kx,ky,1)
+				call hop_lattice(cluster%hop,t,kx,ky,1)
 				V=t-tprime
 				M=>get_M(Q,V,nw,orbit,wprime)
 				call diagnal_exact_complex(nw,M,w,M)
@@ -206,11 +204,11 @@ module lehmann
 		deallocate(tprime)
 	end function
 
-	subroutine lehmann_transform_Q(cluster,Q,miu,kx,ky)
+	subroutine lehmann_transform_Q(cluster,Q,kx,ky)
 		implicit none
 		type(hubbard_cluster_type),pointer,intent(in)::cluster
 		type(Q_type),pointer,intent(inout)::Q
-		real(kind=8),intent(in)::miu,kx,ky
+		real(kind=8),intent(in)::kx,ky
 		real(kind=8),pointer,dimension(:)::w,wprime
 		real(kind=8),pointer,dimension(:,:)::tprime
 		complex(kind=8),pointer,dimension(:,:)::t,V,M
@@ -222,8 +220,8 @@ module lehmann
 		allocate(tprime(orbit,orbit))
 		allocate(t(orbit,orbit))
 		allocate(V(orbit,orbit))
-		call hop_cluster(cluster,tprime,1)
-		call hop_lattice(cluster,miu,t,kx,ky,1)
+		call hop_cluster(cluster%hop,tprime,1)
+		call hop_lattice(cluster%hop,t,kx,ky,1)
 		V=t-tprime
 		call get_w(Q,nw,wprime)
 		allocate(w(nw))
@@ -566,193 +564,52 @@ module lehmann
 		end do
 	end subroutine
 
-	subroutine hop_cluster(cluster,tprime,spin)
-		implicit none
-		integer,intent(in)::spin
-		type(hubbard_cluster_type),pointer,intent(in)::cluster
-		real(kind=8),pointer,dimension(:,:),intent(inout)::tprime
-		integer,allocatable,dimension(:,:)::hop
-		real(kind=8),dimension(2)::d
-		integer::i,j,k,n,site
-		site=cluster_get_n_orbit(cluster)
-		allocate(hop(site,site))
-!		call honey_cluster(hop,site)
-!		call square_cluster(hop,site)
-		hop(1:site,1:site)=cluster%hop%hop(1:site,1:site,0)
-		do i=1,site
-			do j=1,site
-				k=hop(i,j)
-				if(k==0) tprime(i,j)=0.0
-				if(k==1) then
-					d=cluster%hop%coordinate(1:2,i)-cluster%hop%coordinate(1:2,j)
-					if(abs(d(1))>abs(d(2))) then
-						tprime(i,j)=-cluster%tx
-					else
-						tprime(i,j)=-cluster%ty
-					end if
-				end if
-				if(k==2) tprime(i,j)=0.0
-			end do
-			tprime(i,i)=-cluster%miu-cluster%M*(-1)**(spin+i)
-		end do
-	end subroutine
 
-	subroutine hop_lattice(cluster,miu,lattice,kx,ky,spin)
+	subroutine hop_cluster(cl,tprime,spin)
 		implicit none
-		type(hubbard_cluster_type),pointer,intent(in)::cluster
-		integer,intent(in)::spin
-		complex(kind=8),pointer,dimension(:,:),intent(inout)::lattice
-		real(kind=8)::kx,ky,miu
-		integer,allocatable,dimension(:)::st
-		real(kind=8),allocatable,dimension(:)::p,f
-		real(kind=8)::q
-		integer::i,j,k,n,l,site,dim
-		dim=cluster%hop%dim
-		site=cluster_get_n_orbit(cluster)
-		l=cluster%hop%translation
-		allocate(st(dim))
-		allocate(p(dim))
-		allocate(f(dim))
-!		call honey_lattice(lattice,site,kx,ky,miu)
-!		call square_lattice(lattice,site,kx,ky,miu)
-		lattice=cluster%hop%hop(1:site,1:site,0)*(-One)
-		p(1)=kx
-		p(2)=ky
-		do i=1,8
-			q=dot_product(cluster%hop%vector(1:dim,i),p)
-			lattice=lattice-cluster%hop%hop(1:site,1:site,i)*exp(Xi*q)
+		type(hop),pointer::cl
+		real(8),pointer,dimension(:,:)::tprime
+		integer::site,i,j,k,l,spin
+		site=cl%site
+		allocate(tprime(site,site))
+		tprime(1:site,1:site)=0.0
+		do i=1,cl%nct
+			j=cl%cluster(1,i)
+			k=cl%cluster(2,i)
+			l=cl%cluster(3,i)
+			tprime(j,k)=tprime(j,k)-cl%ct(l)
+			tprime(k,j)=tprime(j,k)
 		end do
 		do i=1,site
-			lattice(i,i)=lattice(i,i)-miu
+			tprime(i,i)=tprime(i,i)-cl%cmu-cl%M*(-1)**(i+spin)
 		end do
 	end subroutine
 
-
-!===========================================================================================
-
-	subroutine honey_coor(dim,orbit,coor)
-		integer::dim,orbit
-		real(kind=8),dimension(dim,orbit)::coor
-		coor(1,1)=0.00
-		coor(2,1)=0.00
-		coor(1,2)=-0.50
-		coor(2,2)=1.0*sqrt(3.0)/2
-		coor(1,3)=0.00
-		coor(2,3)=1.0*sqrt(3.0)
-		coor(1,4)=1.00
-		coor(2,4)=1.0*sqrt(3.0)
-		coor(1,5)=1.50
-		coor(2,5)=1.0*sqrt(3.0)/2
-		coor(1,6)=1.00
-		coor(2,6)=0.00
-	end subroutine
-
-	subroutine square_coor(dim,orbit,coor)
-		integer::dim,orbit
-		real(kind=8),dimension(dim,orbit)::coor
-		coor(1,1)=0.00
-		coor(2,1)=0.00
-		coor(1,2)=0.00
-		coor(2,2)=1.00
-		coor(1,3)=1.00
-		coor(2,3)=1.00
-		coor(1,4)=1.00
-		coor(2,4)=0.00
-	end subroutine
-
-	subroutine honey_cluster(t,n)
+	subroutine hop_lattice(cl,lattice,kx,ky,spin)
 		implicit none
-		integer,intent(in)::n
-		integer,dimension(n,n),intent(inout)::t
-		t(1:n,1:n)=0
-		t(1,2)=1
-		t(1,6)=1
-		t(2,1)=1
-		t(2,3)=1
-		t(3,2)=1
-		t(3,4)=1
-		t(4,3)=1
-		t(4,5)=1
-		t(5,4)=1
-		t(5,6)=1
-		t(6,5)=1
-		t(6,1)=1
-	end subroutine
-    
-	subroutine honey_lattice(t,n,kx,ky,miu)
-		implicit none
-		complex(kind=8),pointer,dimension(:,:),intent(out)::t
-		real(kind=8),intent(in)::miu,kx,ky
-		real(kind=8),dimension(2,2)::trans
-		integer::i,j,n
-		trans(1,1)=3.00
-		trans(2,1)=0.00
-		trans(1,2)=1.50
-		trans(2,2)=3*sqrt(3.0)/2
-		do i=1,n
-			do j=1,n
-				t(i,j)=Zero
-			end do
-			t(i,i)=-One*miu
+		type(hop),pointer::cl
+		complex(8),pointer,dimension(:,:)::lattice
+		real(8),dimension(2)::q,kk
+		real(8)::kx,ky
+		integer::site,i,j,k,l,spin
+		site=cl%site
+		kk(1)=kx
+		kk(2)=ky
+		allocate(lattice(site,site))
+		lattice(1:site,1:site)=Zero
+		do i=1,cl%nlt
+			j=cl%lattice(1,i)
+			k=cl%lattice(2,i)
+			l=cl%lattice(3,i)
+			q=cl%lattice(5,i)*cl%vector(1:2,1)+cl%lattice(6,i)*cl%vector(1:2,2)
+			lattice(j,k)=lattice(j,k)-cl%lt(l)*exp(-Xi*dot_product(q,kk))
+			lattice(k,j)=conjg(lattice(j,k))
 		end do
-
-		t(1,2)=-One
-		t(1,6)=-One
-		t(1,4)=-exp(Xi*(kx*trans(1,2)+ky*trans(2,2)))
-		t(2,1)=-One
-		t(2,3)=-One
-		t(2,5)=-exp(Xi*(kx*trans(1,1)+ky*trans(2,1)))
-		t(3,2)=-One
-		t(3,4)=-One
-		t(3,6)=-exp(Xi*(kx*(trans(1,1)-trans(1,2))+ky*(trans(2,1)-trans(2,2))))
-		t(4,3)=-One
-		t(4,5)=-One
-		t(4,1)=-exp(-Xi*(kx*trans(1,2)+ky*trans(2,2)))
-		t(5,4)=-One
-		t(5,6)=-One
-		t(5,2)=-exp(-Xi*(kx*trans(1,1)+ky*trans(2,1)))
-		t(6,5)=-One
-		t(6,1)=-One
-		t(6,3)=-exp(-Xi*(kx*(trans(1,1)-trans(1,2))+ky*(trans(2,1)-trans(2,2))))
-	end subroutine
-
-	subroutine square_lattice(t,site,kx,ky,miu)
-		implicit none
-		complex(kind=8),pointer,dimension(:,:),intent(out)::t
-		real(kind=8),intent(in)::miu,kx,ky
-		integer::i,j,site
 		do i=1,site
-			do j=1,site
-				t(i,j)=Zero
-			end do
-			t(i,i)=-One*miu
+			lattice(i,i)=lattice(i,i)-cl%lmu
 		end do
-
-		t(1,2)=-(One+exp(2*Xi*ky))
-		t(1,4)=-(One+exp(2*Xi*kx))
-		t(2,1)=-(One+exp(-2*Xi*ky))
-		t(2,3)=-(One+exp(2*Xi*kx))
-		t(3,2)=-(One+exp(-2*Xi*kx))
-		t(3,4)=-(One+exp(-2*Xi*ky))
-		t(4,1)=-(One+exp(-2*Xi*kx))
-		t(4,3)=-(One+exp(2*Xi*ky))
 	end subroutine
 
-
-	subroutine square_cluster(t,n)
-		implicit none
-		integer,intent(in)::n
-		integer,dimension(n,n),intent(inout)::t
-		t(1:n,1:n)=0
-		t(1,2)=1
-		t(1,4)=1
-		t(2,1)=1
-		t(2,3)=1
-		t(3,2)=1
-		t(3,4)=1
-		t(4,3)=1
-		t(4,1)=1
-	end subroutine
 
 
 
